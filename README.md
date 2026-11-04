@@ -1,46 +1,167 @@
-# EasyAE DTA decoder
+# decode-easyae-dta
 
-Native Python reader under development for MISTRAS EasyAE / AEWin64 `.DTA`
-files. This folder is self-contained: copy its contents into a new repository
-and continue with [HANDOFF.md](HANDOFF.md).
+Read hits and time-driven data directly from MISTRAS EasyAE / AEwin64 `.DTA` files using
+Python 3.10 or newer and the standard library.
 
-## Current functionality
+The EMPIRE acceptance corpus passes: **180 files, 1,056,916 decoded hits**.
+All **20 columns** agree with all **32 manual AEwin64 exports**, covering
+170,345 hits and 3,406,900 values, at the exports' printed precision.
 
-- Read complete length-delimited messages, preserving unknown IDs and trailing
-  bytes; report malformed boundaries with byte offsets.
-- Extract ordered event characteristic IDs from hardware setup records.
-- Survey numbered experiment folders and compare hit counts, relative times,
-  and channels with existing AEWin64 hit exports.
+Time-data extraction also passes: **180 files, 1,705,249 decoded rows**.
+All **eight columns** match all **32 manual time exports**, covering 277,656
+rows and 2,221,248 values.
 
-Full hit feature decoding, parametric voltage scaling, and `read_hits(path)`
-are the next milestone. Waveforms and time-driven values are not decoded yet.
+## Install
 
-## Run
+```shell
+python -m pip install decode-easyae-dta
+```
 
-Python 3.9 or newer; the utility and tests use only the standard library.
-Run these commands from this folder, or from the new repository root after
-copying the contents there:
+From a checkout, including before the first PyPI release, use `python -m pip install .`.
+The package has no runtime dependencies. It provides the `decode-easyae-dta`
+command and the `decode_easyae_dta` import. Earlier `mistras_dta` imports and
+`python mistras_dta.py ...` commands remain compatible.
+
+## Read hits
+
+```python
+from decode_easyae_dta import read_hits, iter_hits
+
+hits = read_hits(r"C:\path\to\experiment.DTA")
+print(len(hits), hits[0])
+
+# Stream larger recordings; exhaust the iterator to validate the whole file.
+for hit in iter_hits(r"C:\path\to\experiment.DTA"):
+    amplitude = hit["amplitude_db"]
+```
+
+Both `read_hits()` and `read_time_data()` return **lists of dictionaries**, not
+NumPy arrays or pandas DataFrames. Their `iter_` variants yield dictionaries one
+at a time. For optional pandas use, call `pd.DataFrame(read_hits(path))`.
+
+Each hit is a dictionary containing `id` (message type 1), `time_s` (relative
+to the recording clock), `channel`, the configured features in physical units,
+and `parametric_1` etc. Parametrics are volts under the supported unity-scaling
+profile. Feature keys identify units: `_us` for microseconds, `_khz` for kHz,
+`_db` for dB, `_v` for volts, `_pvs` for pVs and `_aj` for aJ. Counts and
+`energy` retain instrument counts. Hits retain file order.
+
+## Extract CSV
+
+```powershell
+decode-easyae-dta 'C:\path\to\experiment.DTA' --output results/experiment_hits.csv
+
+# Extract the time data instead:
+decode-easyae-dta 'C:\path\to\experiment.DTA' --kind time --output results/experiment_time.csv
+```
+
+The command validates the input before creating the CSV, preserves numeric
+precision, and requires a new output filename. CSV headings and column order match
+the AEwin64 exports, including `PARA1`, `SIG STRNGTH`, and `R-FRQ`.
+
+Each CSV starts with four metadata rows and a blank line:
+
+```csv
+Source File,C:\path\to\experiment.DTA
+Product,EasyAE (r) Location Version
+Version,V1.00
+Test Start,Mon Oct 26 11:33:41 2026
+
+ID,SSSSSSSS.mmmuuun,PARA1,CH,...
+```
+
+The product/version come from binary message ID 41; the test-start text comes
+from ID 99. The source path is the current input file's absolute path. The stored
+test time has no timezone, and missing metadata is shown as `Not recorded`.
+Use `--no-metadata` for a CSV beginning directly with the data column headings.
+For pandas, read the default CSV using `pd.read_csv(path, skiprows=5)`.
+
+Metadata is also available separately in Python:
+
+```python
+from decode_easyae_dta import read_metadata
+
+metadata = read_metadata(r"C:\path\to\experiment.DTA")
+print(metadata.source_file, metadata.test_start)
+```
+
+## Read time data
+
+```python
+from decode_easyae_dta import read_time_data, iter_time_data, write_time_csv, read_metadata
+
+path = r"C:\path\to\experiment.DTA"
+rows = read_time_data(path)
+print(len(rows), rows[0])
+
+with open("experiment_time.csv", "x", encoding="utf-8", newline="") as stream:
+    write_time_csv(rows, stream, metadata=read_metadata(path))
+```
+
+The time CSV uses `ID,SSSSSSSS.mmmuuun,PARA1,CH,RMS,THR,ABS-ENERGY,ASL`
+for this corpus. AEwin64's text exports place the channel values in a separate
+bracketed block below each timestamp. The CSV flattens that block into one row
+per timestamp and channel, repeating timestamp and parametric values across
+channels. The corpus uses one channel. Numeric values retain full decoded
+precision; timestamps use the recording clock, as in the hit CSV.
+
+Python rows use the same descriptive keys and physical units as hits:
+`time_s`, `parametric_1`, `channel`, `rms_v`, `threshold_db`,
+`absolute_energy_aj`, `asl_db`, and `id` (2 for time-driven records).
+`iter_time_data(path)` streams these rows. Manufacturer-documented ID 3 sample
+records use the same layout and retain ID 3; none occur in this corpus.
+
+## Validate
 
 ```powershell
 python -m unittest -v
 $env:EMPIRE_AE_DATA = 'C:\path\to\EMPIRE_acoustic_tests'
+python validate_mistras_dta.py "$env:EMPIRE_AE_DATA" --output results/empire_hit_validation.json
+python validate_mistras_dta.py "$env:EMPIRE_AE_DATA" --kind time --output results/empire_time_validation.json
+
+# Or compare a single pair:
+python validate_mistras_dta.py 'C:\path\to\experiment.DTA' --export 'C:\path\to\experiment_hits.TXT'
+python validate_mistras_dta.py 'C:\path\to\experiment.DTA' --kind time --export 'C:\path\to\experiment_time.TXT'
+```
+
+The corpus command visits numbered `EMPIRE_acoustic_<number>` folders, excluding
+`misc`. It reads every DTA, compares every column in every corresponding
+`<DTA stem>_hits.txt` export (or `_time.txt` with `--kind time`), and writes a
+report outside the raw-data directory.
+The acquisition corpus and generated reports are kept locally and are not
+included in the public repository or package.
+Counts and integer features must agree exactly; other values must agree within
+half the last printed decimal place. Failures produce a nonzero exit status.
+The comparator checks schema equality and treats `SIG STRNGTH` as one column.
+
+The earlier framing-only survey remains available:
+
+```powershell
 python survey_mistras_dta.py "$env:EMPIRE_AE_DATA" --output results/empire_dta_survey.json
 ```
 
-The survey expects `EMPIRE_acoustic_<number>` subfolders and optional matching
-`<DTA stem>_hits.TXT` files beside the DTA files. It reads the source data without
-modifying it and writes the JSON report outside the raw data directory. A
-malformed file, export mismatch, or empty corpus gives a nonzero exit status.
+## Supported scope
 
-## Included material
+This reader supports the **EasyAE V1.00 profile and calibration/scaling metadata
+verified in the EMPIRE corpus**. It reads the configured feature order and checks
+the product, hardware version, preamp/gain, channel calibration and parametric
+scaling records. Unsupported characteristics or calibration settings raise
+`DtaFormatError`, including byte offsets. General custom multiplier/offset
+decoding remains unimplemented; the verified unity-scaling record is recognized
+as a whole. Agreement at export precision does not establish extra digits of
+parametric calibration accuracy.
 
-- [HANDOFF.md](HANDOFF.md): data location, known failure, next task, and acceptance criteria.
-- [docs/empire-dta-survey.md](docs/empire-dta-survey.md): verified corpus baseline.
-- [docs/mistras-dta-format-research.md](docs/mistras-dta-format-research.md): manual and source references.
-- [reports/empire_dta_survey.json](reports/empire_dta_survey.json): complete initial survey using relative paths.
-- [diagnostics/test_mistras_dta.ipynb](diagnostics/test_mistras_dta.ipynb): original `MistrasDTA` reproduction notebook.
+Start markers are optional; the extra control byte is safely framed. Unknown
+message IDs are skipped using declared boundaries. Waveforms,
+continued-file setup and other instrument profiles are outside this milestone.
+Time-data characteristics are restricted to the verified THR, RMS, ABS-ENERGY
+and ASL encodings. Custom parametric scaling and cycle counters are unsupported.
+Two-channel decoding also matches a separate real dual-sensor acquisition's
+hit and time exports.
+Multiple analog parametrics, schema updates, and ID 3 have synthetic coverage
+only. The real time exports exercise PARA1.
 
-The diagnostic notebook requires the third-party `MistrasDTA` package and uses
-the original local data path. It is historical context, not required to run
-this utility. Raw binaries, TXT exports, and the vendor manual are external
-inputs. The project carries the original AELab MIT license in [LICENSE](LICENSE).
+Raw binaries, TXT exports and the vendor manual stay external to this repository.
+The project uses the MIT license in [LICENSE](https://github.com/spier16/decode-easyae-dta/blob/main/LICENSE).
+For development, see [CONTRIBUTING.md](https://github.com/spier16/decode-easyae-dta/blob/main/CONTRIBUTING.md). The separate
+[decode-wfs](https://github.com/spier16/decode-wfs) project decodes waveform streams.

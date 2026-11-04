@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from mistras_dta import DtaFormatError, event_characteristics, iter_messages
+from decode_easyae_dta import DtaFormatError, event_characteristics, iter_messages
 
 
 def compare_export(path, binary_hits):

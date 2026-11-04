@@ -1,11 +1,41 @@
+# Python environments, caches and build output
 __pycache__/
 *.py[cod]
 .venv/
-.env
-.ipynb_checkpoints/
+venv/
+build/
+dist/
+*.egg-info/
 .pytest_cache/
-results/
-data/raw/
-*.DTA
-*.dta
-*.wfs
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local credentials and configuration
+.pypirc
+.env
+.env.*
+!.env.example
+!.env.sample
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+
+# Internal working notes and diagnostic artifacts (kept locally)
+/HANDOFF.md
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.codex/
+/docs/
+/diagnostics/
+/reports/
+/results/
+
+# Private acquisition data; public tests use in-memory synthetic fixtures
+/data/
+*.[dD][tT][aA]
+*.[wW][fF][sS]
