@@ -10,3 +10,8 @@
 - Provide the `decode-easyae-dta` command and retain `mistras_dta` compatibility.
 - Validate against 32 paired hit exports, 32 time exports, and a separate real
   two-channel acquisition. Reject unsupported calibration and schema settings.
+
+## 0.2.0
+
+- `read_hits()`, `read_time_data()`, `iter_hits()`, and `iter_time_data()` now
+  return rows keyed by AEwin64 headings.

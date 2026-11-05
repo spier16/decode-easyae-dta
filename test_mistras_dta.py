@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from decode_easyae_dta import DtaFormatError, event_characteristics, iter_messages
-from decode_easyae_dta import read_metadata, write_hits_csv, read_time_data, write_time_csv
+from decode_easyae_dta import iter_hits, iter_time_data, read_metadata, read_time_data
+from decode_easyae_dta import write_hits_csv, write_time_csv
 from survey_mistras_dta import compare_export
 from validate_mistras_dta import compare_hits, compare_time_data, read_time_export
 
@@ -138,13 +139,11 @@ class HitDecodingTests(unittest.TestCase):
             return read_hits(Path("test.DTA"))
 
     def test_feature_values_with_and_without_start_marker(self):
-        expected = dict(id=1, time_s=0.000003, channel=1, rise_us=15906, counts_to_peak=347,
-                        counts=348, energy=8, duration_us=16001, threshold_db=10,
-                        average_frequency_khz=22, rms_v=0.0, reverberation_frequency_khz=10,
-                        initiation_frequency_khz=21, signal_strength_pvs=53317.05078125,
-                        absolute_energy_aj=50.68829345703125, centroid_frequency_khz=160,
-                        peak_frequency_khz=2, amplitude_db=25.9, asl_db=0.1,
-                        parametric_1=123 * 10 / 65536)
+        expected = {"ID": 1, "SSSSSSSS.mmmuuun": 0.000003, "PARA1": 123 * 10 / 65536,
+                    "CH": 1, "RISE": 15906, "COUN": 348, "ENER": 8, "DURATION": 16001,
+                    "A-FRQ": 22, "RMS": 0.0, "PCNTS": 347, "THR": 10, "R-FRQ": 10,
+                    "I-FRQ": 21, "SIG STRNGTH": 53317.05078125, "ABS-ENERGY": 50.68829345703125,
+                    "FRQ-C": 160, "P-FRQ": 2, "AMP": 25.9, "ASL": 0.1}
         for marker in (b"", frame(b"\x80" + bytes(6) + b"\x01")):
             with self.subTest(marker=marker):
                 self.assertEqual(self.decode(setup() + marker + synthetic_hit()), [expected])
@@ -153,19 +152,19 @@ class HitDecodingTests(unittest.TestCase):
         hit = frame(b"\x01" + bytes(6) + b"\x01" + struct.pack("<HH", 450, 42)
                     + b"\x02\xff\xff\x01\x00\x80")
         result = self.decode(setup((27, 1), 2) + hit)[0]
-        self.assertEqual(result["amplitude_db"], 45)
-        self.assertEqual(result["rise_us"], 42)
-        self.assertEqual(result["parametric_1"], 5)
-        self.assertEqual(result["parametric_2"], 65535 * 10 / 65536)
+        self.assertEqual(result["AMP"], 45)
+        self.assertEqual(result["RISE"], 42)
+        self.assertEqual(result["PARA1"], 5)
+        self.assertEqual(result["PARA2"], 65535 * 10 / 65536)
 
     def test_single_precision_energy_multiplication(self):
         hit = frame(b"\x01" + bytes(6) + b"\x01" + struct.pack("<f", 192384))
-        value = self.decode(setup((21,), 0) + hit)[0]["absolute_energy_aj"]
+        value = self.decode(setup((21,), 0) + hit)[0]["ABS-ENERGY"]
         self.assertEqual(value, 179.1094970703125)
 
     def test_single_precision_signal_strength(self):
         hit = frame(b"\x01" + bytes(6) + b"\x01" + struct.pack("<I", 17377541))
-        value = self.decode(setup((20,), 0) + hit)[0]["signal_strength_pvs"]
+        value = self.decode(setup((20,), 0) + hit)[0]["SIG STRNGTH"]
         self.assertLessEqual(abs(value - 53001000), 500)
         self.assertGreater(17377541 * 3.05 - 53001000, 500)
 
@@ -186,9 +185,10 @@ class HitDecodingTests(unittest.TestCase):
         data = setup((1,), 0) + frame(b"\x01" + bytes(6) + b"\x01\x2a\x00")
         data += frame(b"\xfa\x01\x02") + frame(bytes([5, 1, 27, 0]))
         data += frame(b"\x01" + bytes(6) + b"\x01\xc2\x01")
-        hits = self.decode(data)
-        self.assertEqual(hits[0]["rise_us"], 42)
-        self.assertEqual(hits[1]["amplitude_db"], 45)
+        with patch.object(Path, "open", return_value=io.BytesIO(data)):
+            hits = list(iter_hits(Path("test.DTA")))
+        self.assertEqual(hits, [{"ID": 1, "SSSSSSSS.mmmuuun": 0.0, "CH": 1, "RISE": 42},
+                                {"ID": 1, "SSSSSSSS.mmmuuun": 0.0, "CH": 1, "AMP": 45}])
 
     def test_bad_parametric_records(self):
         prefix = b"\x01" + bytes(6) + b"\x01"
@@ -234,10 +234,11 @@ class TimeDecodingTests(unittest.TestCase):
 
     def test_values_and_csv_use_time_definition(self):
         data = time_setup() + synthetic_hit() + synthetic_time()
-        row = self.decode(data)[0]
-        self.assertEqual(row, dict(id=2, time_s=0.0100965, parametric_1=126 * 10 / 65536,
-                                  channel=1, threshold_db=10, rms_v=0.25,
-                                  absolute_energy_aj=179.1094970703125, asl_db=15.8))
+        with patch.object(Path, "open", return_value=io.BytesIO(data)):
+            row, = iter_time_data(Path("test.DTA"))
+        self.assertEqual(row, {"ID": 2, "SSSSSSSS.mmmuuun": 0.0100965, "PARA1": 126 * 10 / 65536,
+                               "CH": 1, "RMS": 0.25, "THR": 10,
+                               "ABS-ENERGY": 179.1094970703125, "ASL": 15.8})
         stream = io.StringIO(newline="")
         write_time_csv(iter([row]), stream)
         table = list(csv.reader(io.StringIO(stream.getvalue())))
@@ -253,13 +254,13 @@ class TimeDecodingTests(unittest.TestCase):
                                + b"\x01" + struct.pack("<HH", 158, 1250),
                                b"\x02\xff\xff\x01\x00\x80")
         rows = self.decode(data)
-        self.assertEqual([row["channel"] for row in rows], [2, 1])
-        self.assertEqual([row["asl_db"] for row in rows], [20, 15.8])
-        self.assertEqual([row["rms_v"] for row in rows], [1, 0.25])
+        self.assertEqual([row["CH"] for row in rows], [2, 1])
+        self.assertEqual([row["ASL"] for row in rows], [20, 15.8])
+        self.assertEqual([row["RMS"] for row in rows], [1, 0.25])
         for row in rows:
-            self.assertEqual(row["id"], 3)
-            self.assertEqual(row["parametric_1"], 5)
-            self.assertEqual(row["parametric_2"], 65535 * 10 / 65536)
+            self.assertEqual(row["ID"], 3)
+            self.assertEqual(row["PARA1"], 5)
+            self.assertEqual(row["PARA2"], 65535 * 10 / 65536)
 
     def test_parametric_only_and_definition_updates(self):
         data = time_setup((), (1,)) + synthetic_time(channels=b"")
@@ -267,8 +268,8 @@ class TimeDecodingTests(unittest.TestCase):
         data += frame(bytes([5, 1, 1, 0]))  # Updating hits must not change time data.
         data += synthetic_time(channels=b"\x01\x9e\x00", parametrics=b"")
         rows = self.decode(data)
-        self.assertEqual(set(rows[0]), {"id", "time_s", "parametric_1"})
-        self.assertEqual(rows[1], dict(id=2, time_s=0.0100965, channel=1, asl_db=15.8))
+        self.assertEqual(set(rows[0]), {"ID", "SSSSSSSS.mmmuuun", "PARA1"})
+        self.assertEqual(rows[1], {"ID": 2, "SSSSSSSS.mmmuuun": 0.0100965, "CH": 1, "ASL": 15.8})
         self.assertEqual(self.decode(time_setup()), [])
 
     def test_unsupported_and_malformed_time_data(self):
@@ -299,18 +300,18 @@ class TimeExportComparisonTests(unittest.TestCase):
             return compare_time_data(Path("time.TXT"), rows)
 
     def test_all_columns_multiple_channels_and_corruption(self):
-        common = dict(id=2, time_s=0.0100965, parametric_1=126 * 10 / 65536)
-        rows = [{**common, "channel": 1, "rms_v": 0.25, "threshold_db": 10,
-                 "absolute_energy_aj": 179.1094970703125, "asl_db": 15.8},
-                {**common, "channel": 2, "rms_v": 0.5, "threshold_db": 11,
-                 "absolute_energy_aj": 0, "asl_db": 20}]
+        common = {"ID": 2, "SSSSSSSS.mmmuuun": 0.0100965, "PARA1": 126 * 10 / 65536}
+        rows = [{**common, "CH": 1, "RMS": 0.25, "THR": 10,
+                 "ABS-ENERGY": 179.1094970703125, "ASL": 15.8},
+                {**common, "CH": 2, "RMS": 0.5, "THR": 11,
+                 "ABS-ENERGY": 0, "ASL": 20}]
         text = self.header + self.block
         self.assertEqual(self.compare(text, rows)["values"], 16)
         for key in rows[0]:
             changed = [{**rows[0], key: rows[0][key] + 1}, rows[1]]
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.compare(text, changed)
-        for changed in (rows[::-1], rows[:1], [{**rows[0], "rms_v": float("nan")}, rows[1]]):
+        for changed in (rows[::-1], rows[:1], [{**rows[0], "RMS": float("nan")}, rows[1]]):
             with self.assertRaises(ValueError):
                 self.compare(text, changed)
         self.assertEqual(self.compare(text + self.block, rows * 2)["rows"], 4)

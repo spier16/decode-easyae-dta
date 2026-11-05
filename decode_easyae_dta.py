@@ -12,7 +12,7 @@ from pathlib import Path
 import struct
 from typing import BinaryIO, Iterator, Optional
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AEWIN_COLUMNS", "DtaFormatError", "DtaMetadata", "Message",
@@ -274,7 +274,7 @@ class _TimeDecoder(_HitDecoder):
 
 
 def iter_hits(path):
-    """Yield hit dictionaries in file order, in physical units.
+    """Yield hits in file order, keyed by AEwin64 export headings.
 
     Unknown messages are skipped by their declared boundaries. Unsupported
     product/calibration/feature layouts raise DtaFormatError. A start marker
@@ -306,28 +306,29 @@ def _iter_data(path, decoder, message_ids):
             elif message.id in message_ids:
                 decoded = decoder.decode(message)
                 if isinstance(decoder, _TimeDecoder):
-                    yield from decoded
+                    yield from (_aewin_row(row) for row in decoded)
                 else:
-                    yield decoded
+                    yield _aewin_row(decoded)
         decoder.require_setup(stream.tell())
 
 
 def read_hits(path):
-    """Return all decoded hit dictionaries; see iter_hits for streaming reads."""
+    """Return all decoded hits keyed by AEwin64 export headings."""
     return list(iter_hits(path))
 
 
 def iter_time_data(path):
     """Yield time-driven (ID 2) and forced-sample (ID 3) rows in file order.
 
-    Each channel becomes a row, repeating its timestamp and parametric values.
-    Parametric-only records have no channel field. Exhaust to validate the file.
+    Rows use AEwin64 export headings. Each channel becomes a row, repeating
+    its timestamp and parametric values. Parametric-only rows have no CH key.
+    Exhaust to validate the file.
     """
     yield from _iter_data(path, _TimeDecoder(), (2, 3))
 
 
 def read_time_data(path):
-    """Return all time-data rows; see iter_time_data for streaming reads."""
+    """Return all decoded time-data rows keyed by AEwin64 export headings."""
     return list(iter_time_data(path))
 
 
@@ -371,7 +372,7 @@ def read_metadata(path):
     return DtaMetadata(str(path.resolve()), product, version, test_start)
 
 
-# AEwin64's ASCII export order; only columns present in the hits are written.
+# AEwin64's ASCII export headings in column order, mapped to descriptive keys.
 AEWIN_COLUMNS = {
     "ID": "id", "SSSSSSSS.mmmuuun": "time_s",
     **{f"PARA{pid}": f"parametric_{pid}" for pid in range(1, 9)},
@@ -383,25 +384,30 @@ AEWIN_COLUMNS = {
     "FRQ-C": "centroid_frequency_khz", "P-FRQ": "peak_frequency_khz",
     "AMP": "amplitude_db", "ASL": "asl_db",
 }
+_AEWIN_HEADINGS = {key: heading for heading, key in AEWIN_COLUMNS.items()}
+
+
+def _aewin_row(row):
+    return {heading: row[key] for heading, key in AEWIN_COLUMNS.items() if key in row}
 
 
 def write_hits_csv(hits, stream, *, metadata=None):
     """Write AEwin64 hit columns, optionally preceded by recording metadata."""
-    _write_data_csv(hits, stream, metadata=metadata, empty_fields={"id", "time_s", "channel"})
+    _write_data_csv(hits, stream, metadata=metadata, empty_fields={"ID", "SSSSSSSS.mmmuuun", "CH"})
 
 
 def write_time_csv(rows, stream, *, metadata=None):
     """Write a regular time-data table using AEwin64 column names."""
-    _write_data_csv(rows, stream, metadata=metadata, empty_fields={"id", "time_s"})
+    _write_data_csv(rows, stream, metadata=metadata, empty_fields={"ID", "SSSSSSSS.mmmuuun"})
 
 
-def _write_data_csv(hits, stream, *, metadata, empty_fields):
-    hits = list(hits)
-    fields = {key for hit in hits for key in hit} or empty_fields
-    unknown = fields - set(AEWIN_COLUMNS.values())
+def _write_data_csv(rows, stream, *, metadata, empty_fields):
+    rows = list(rows)
+    fields = {_AEWIN_HEADINGS.get(key, key) for row in rows for key in row} or empty_fields
+    unknown = fields - AEWIN_COLUMNS.keys()
     if unknown:
         raise ValueError(f"Unsupported CSV fields: {sorted(unknown)}")
-    columns = [(heading, key) for heading, key in AEWIN_COLUMNS.items() if key in fields]
+    columns = [(heading, key) for heading, key in AEWIN_COLUMNS.items() if heading in fields]
     writer = csv.writer(stream)
     if metadata is not None:
         writer.writerows([
@@ -412,7 +418,7 @@ def _write_data_csv(hits, stream, *, metadata, empty_fields):
             [],
         ])
     writer.writerow([heading for heading, _ in columns])
-    writer.writerows([hit.get(key, "") for _, key in columns] for hit in hits)
+    writer.writerows([row.get(heading, row.get(key, "")) for heading, key in columns] for row in rows)
 
 
 def main():

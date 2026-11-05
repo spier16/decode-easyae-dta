@@ -11,7 +11,7 @@ import re
 from decode_easyae_dta import AEWIN_COLUMNS
 
 
-# Export headings -> reader keys. SIG STRNGTH is one heading, despite its space.
+# Export headings -> legacy keys. SIG STRNGTH is one heading, despite its space.
 EXPORT_FIELDS = {heading.replace("SIG STRNGTH", "SIG_STRNGTH"): key
                  for heading, key in AEWIN_COLUMNS.items()}
 
@@ -132,15 +132,23 @@ def compare_time_data(path, data):
 
 
 def _compare_rows(columns, rows, hits, count_key):
-    keys = [reader_key(column) for column in columns]
+    legacy_keys = [reader_key(column) for column in columns]
+    headings = [column.replace("SIG_STRNGTH", "SIG STRNGTH") for column in columns]
+    column_set = set(columns)
+    heading_set = set(headings)
+    legacy_key_set = set(legacy_keys)
     if len(rows) != len(hits):
         raise ValueError(f"Export has {len(rows)} {count_key}; DTA has {len(hits)}")
     for index, (row, hit) in enumerate(zip(rows, hits), 1):
-        if set(row) != set(columns):
+        if row.keys() != column_set:
             raise ValueError(f"Export column mismatch at row {index}")
-        if set(hit) != set(keys):
+        if hit.keys() == heading_set:
+            keys = headings
+        elif hit.keys() == legacy_key_set:
+            keys = legacy_keys
+        else:
             raise ValueError(f"Column mismatch at row {index}: "
-                             f"export={sorted(keys)}, decoded={sorted(hit)}")
+                             f"export={sorted(headings)}, decoded={sorted(hit)}")
         for column, key in zip(columns, keys):
             token = row[column]
             try:

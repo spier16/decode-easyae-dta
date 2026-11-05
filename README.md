@@ -32,19 +32,23 @@ print(len(hits), hits[0])
 
 # Stream larger recordings; exhaust the iterator to validate the whole file.
 for hit in iter_hits(r"C:\path\to\experiment.DTA"):
-    amplitude = hit["amplitude_db"]
+    amplitude = hit["AMP"]
 ```
 
-Both `read_hits()` and `read_time_data()` return **lists of dictionaries**, not
-NumPy arrays or pandas DataFrames. Their `iter_` variants yield dictionaries one
-at a time. For optional pandas use, call `pd.DataFrame(read_hits(path))`.
+Both `read_hits()` and `read_time_data()` return lists of dictionaries keyed
+by the exact AEwin64 CSV headings. For example, use `hits[0]["AMP"]` to get
+amplitude in dB or `hits[0]["SSSSSSSS.mmmuuun"]` to get seconds relative to the
+recording clock. For optional pandas use, call `pd.DataFrame(read_hits(path))`.
 
-Each hit is a dictionary containing `id` (message type 1), `time_s` (relative
-to the recording clock), `channel`, the configured features in physical units,
-and `parametric_1` etc. Parametrics are volts under the supported unity-scaling
-profile. Feature keys identify units: `_us` for microseconds, `_khz` for kHz,
-`_db` for dB, `_v` for volts, `_pvs` for pVs and `_aj` for aJ. Counts and
-`energy` retain instrument counts. Hits retain file order.
+Each hit contains `ID` (message type 1), `CH`, the configured features and
+any recorded parametrics (`PARA1` through `PARA8`). Rise time and duration are
+in microseconds, frequencies in kHz, and threshold, amplitude and ASL in dB.
+RMS and parametrics are in volts, signal strength is in pVs, and absolute
+energy is in aJ. `COUN`, `PCNTS`, and `ENER` retain instrument counts. Hits
+retain file order.
+
+`iter_hits()` and `iter_time_data()` yield dictionaries one at a time with
+the same AEwin64 headings.
 
 ## Extract CSV
 
@@ -105,11 +109,10 @@ per timestamp and channel, repeating timestamp and parametric values across
 channels. The corpus uses one channel. Numeric values retain full decoded
 precision; timestamps use the recording clock, as in the hit CSV.
 
-Python rows use the same descriptive keys and physical units as hits:
-`time_s`, `parametric_1`, `channel`, `rms_v`, `threshold_db`,
-`absolute_energy_aj`, `asl_db`, and `id` (2 for time-driven records).
-`iter_time_data(path)` streams these rows. Manufacturer-documented ID 3 sample
-records use the same layout and retain ID 3; none occur in this corpus.
+`read_time_data()` uses the same keys as the CSV. Parametric-only rows have
+no `CH` key. `ID` is 2 for time-driven records and 3 for forced samples.
+`write_time_csv()` and `write_hits_csv()` accept rows from either the list-based
+readers or the streaming iterators.
 
 ## Validate
 
